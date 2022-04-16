@@ -13,8 +13,12 @@ systemctl restart sshd
 firewall-cmd --add-port=10888/tcp --permanent
 # firewalld开放80，443端口
 firewall-cmd --add-port=80/tcp --add-port=443/tcp --permanent
+# firewall开放http服务
+firewall-cmd --permanent --add-service=http
+# firewall开放https服务
+firewall-cmd --permanent --add-service=https
 # 重新加载firewalld配置
 firewall-cmd --reload
 
 # 安装netstat,lsof等网络工具
-yum install -y net-tools lsof
+yum install -y net-tools lsof wget curl bash-completion.noarch vim
