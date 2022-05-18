@@ -1,0 +1,126 @@
+def code_url = 'https://fms-sre-gitlab.fommos.tech/fe/fommos-pc-fe.git'
+def project = 'fe'
+def serverName = 'fommos-pc'
+def k8sNs = 'fms-fe-beta'
+def replicasNum = '1'
+def branch = 'beta'
+//def registryUrl = 'tx-gz-sre-prod-cloud-harobr-001.tencentcloudcr.com'
+def registryUrl = 'tx-sv-sre-prod-cloud-harobr-001.tencentcloudcr.com'
+def newImage = "${registryUrl}/${project}/${branch}/${serverName}:$BUILD_NUMBER"
+def credentialsId = '68cdc090-44aa-420d-970f-3523dd78ba56'
+
+pipeline {
+  agent {
+      node ('tx-sv-sre-prod-cicd-001')
+  }
+  parameters {
+    string(name: 'rollBack', defaultValue: 'no', description: '是否回滚 默认为no,如需回滚直接写入版本号') 
+  }
+  stages {
+    stage('是否更新') {
+      steps {
+        script {
+          if ( "${params.rollBack}" != 'no' ) {
+            oldImage = "${registryUrl}/${project}/${branch}/${serverName}:${params.rollBack}"
+            echo "开始回滚,回滚版本号:${params.rollBack}！"
+            sh """
+              cd k8s-yaml/
+              sed -i 's#serverName#${serverName}#g' *.yaml
+              sed -i 's#image: .*#image: $oldImage#g' *.yaml
+              sed -i 's#k8sNs#$k8sNs#g' *.yaml
+              sed -i 's#replicasNum#$replicasNum#g' *.yaml
+              source ~/.bashrc 
+              k8s-beta
+              kubectl apply -f deployment-beta.yaml
+               kubectl rollout status deployment/$serverName -n $k8sNs
+              """
+          } else {
+              stage('代码更新') {
+                git branch: "$branch", credentialsId: "$credentialsId", url: "$code_url"
+              }
+              stage('创建镜像') {
+                sh """
+                
+                 docker build -t $newImage -f Dockerfile-beta .
+                  """
+              }
+              stage('推送镜像') {
+                sh """
+                  docker push $newImage
+                  docker rmi $newImage
+
+                  """
+              }
+              stage('部署服务') {
+                sh """
+                   cd k8s-yaml/
+                   sed -i 's#serverName#${serverName}#g' *.yaml
+                   sed -i 's#service_image#${newImage}#g' *.yaml
+                   sed -i 's#k8sNs#$k8sNs#g' *.yaml
+                   sed -i 's#replicasNum#$replicasNum#g' *.yaml
+                   source ~/.bashrc 
+                   k8s-beta
+                   kubectl apply -f deployment-beta.yaml
+                   kubectl rollout status deployment/$serverName -n $k8sNs
+                """
+              }
+              
+             
+            }
+        }
+      }
+      post {
+     always{
+            script{
+                    sh  """ 
+                    curl https://sre-platform.fommos.tech/api/jenkins/${BUILD_NUMBER}/${project}/jenkins/${currentBuild.projectName}/${currentBuild.startTimeInMillis}/${currentBuild.duration}/${currentBuild.currentResult} 
+
+                    """
+                }
+     }
+            success {
+                 dingtalk (
+                        robot: 'fms-dingding',
+                        type: 'MARKDOWN',
+                        title: '${project}更新成功',
+                        text: [
+                            "### ${JOB_NAME}发布更新 ",
+                            "---",
+                            "1. 服务名：${project}",
+                            "2. 分支：${branch} ",
+                            "3. 更新结果：成功 ",
+                            "4. [详情查看](${BUILD_URL}changes)",
+                
+                        ],
+                        at: [
+                          '13660747593',  //李俊波
+                        ]
+                    )
+                }
+            failure {
+                dingtalk (
+                        robot: 'fms-dingding',
+                        type: 'MARKDOWN',
+                        title: '${project}更新失败',
+                        text: [
+                           "### ${JOB_NAME}发布更新 ",
+                            "---",
+                            "1. 服务名：${project}",
+                            "2. 分支：${branch} ",
+                            "3. 更新结果：失败 ",
+                            "4. [详情查看](${BUILD_URL}console)",
+                        ],
+                        at: [
+                            '13660747593',  //李俊波
+                            '15521011314', //钱德军
+                            '13798147347', 
+                        ],
+                        atAll: false,
+                        )
+
+                }    
+        }
+    }      
+
+  }  
+}

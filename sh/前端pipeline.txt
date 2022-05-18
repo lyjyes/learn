@@ -1,0 +1,108 @@
+def code_url = 'https://fms-sre-gitlab.fommos.tech/fe/fommos-m-fe.git'
+def project = 'fe'
+def serverName = 'm-fe'
+def branch = 'master'
+def credentialsId = '68cdc090-44aa-420d-970f-3523dd78ba56'
+
+
+pipeline {
+  agent {
+      node ('tx-sv-sre-prod-cicd-001')
+  }
+  stages {
+    stage('代码更新') {
+        steps {
+            git branch: "$branch", credentialsId: "$credentialsId", url: "$code_url"
+            }
+        }
+    stage('前端构建') {
+        steps {
+          sh """
+                docker exec node-lts-build sh -c "mkdir -p /usr/src/$serverName"
+                #docker exec node-lts-build sh -c "rm -rf /usr/src/$serverName/*"
+	docker cp . node-lts-build:/usr/src/$serverName/
+                docker exec node-lts-build sh -c "cd /usr/src/$serverName && yarn install && yarn build:pre"
+                docker cp node-lts-build:/usr/src/$serverName/webapp/ .
+             """
+            }
+        }
+    stage('推送到cos存储') {
+        steps {
+          sh """
+                   source ~/.bashrc 
+                   cos-m
+                   /usr/local/bin/coscmd upload  -rs webapp/ / 
+             """
+            }
+        }
+    stage('更新configmap') {
+        steps {
+          sh """
+                  cd webapp
+                  mkdir -p cm-webapp
+                  rm -rf cm-webapp/*
+                  cp `ls -l|grep  "^-"|awk '{print \$9}'` cm-webapp/
+                   source ~/.bashrc 
+                   k8s-prod
+                  kubectl create configmap pwa-webapp --from-file=cm-webapp/ -n fms-shop-prod
+                 # kubectl create configmap pwa-webapp --from-file=cm-webapp/ -o yaml --dry-run -n fms-shop-prod| kubectl replace -f -
+
+             """
+            }
+        }
+
+ } 
+ post {
+     always{
+            script{
+                    sh  """ 
+                    curl https://sre-platform.fommos.tech/api/jenkins/${BUILD_NUMBER}/${project}/jenkins/${currentBuild.projectName}/${currentBuild.startTimeInMillis}/${currentBuild.duration}/${currentBuild.currentResult} 
+
+                    """
+                }
+     }
+            success {
+                 dingtalk (
+                        robot: 'fms-dingding',
+                        type: 'MARKDOWN',
+                        title: '${project}更新成功',
+                        text: [
+                            "### ${JOB_NAME}发布更新 ",
+                            "---",
+                            "1. 服务名：${project}",
+                            "2. 分支：${branch} ",
+                            "3. 更新结果：成功 ",
+                            "4. [详情查看](${BUILD_URL}changes)",
+                
+                        ],
+                        at: [
+                           // '13539849447', //义怀
+
+                        ]
+                    )
+                }
+            failure {
+                dingtalk (
+                        robot: 'fms-dingding',
+                        type: 'MARKDOWN',
+                        title: '${project}更新失败',
+                        text: [
+                           "### ${JOB_NAME}发布更新 ",
+                            "---",
+                            "1. 服务名：${project}",
+                            "2. 分支：${branch} ",
+                            "3. 更新结果：失败 ",
+                            "4. [详情查看](${BUILD_URL}console)",
+                        ],
+                        at: [
+                            '13539849447', 
+                            //'18125727737', //邹德泽
+                            '15521011314', //钱德军
+                        ],
+                        atAll: false,
+                        )
+
+                }    
+            } 
+               
+}
